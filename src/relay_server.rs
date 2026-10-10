@@ -47,7 +47,7 @@ const BLOCKLIST_FILE: &str = "blocklist.txt";
 
 #[tokio::main(flavor = "multi_thread")]
 pub async fn start(port: &str, key: &str) -> ResultType<()> {
-    let key = get_server_sk(key);
+    let key = get_server_sk(key)?;
     if let Ok(mut file) = std::fs::File::open(BLACKLIST_FILE) {
         let mut contents = String::new();
         if file.read_to_string(&mut contents).is_ok() {
@@ -565,7 +565,7 @@ async fn relay(
     Ok(())
 }
 
-fn get_server_sk(key: &str) -> String {
+fn get_server_sk(key: &str) -> ResultType<String> {
     let mut key = key.to_owned();
     if let Ok(sk) = base64::decode(&key) {
         if sk.len() == sign::SECRETKEYBYTES {
@@ -575,7 +575,7 @@ fn get_server_sk(key: &str) -> String {
     }
 
     if key == "-" || key == "_" {
-        let (pk, _) = crate::common::gen_sk(300);
+        let (pk, _) = crate::common::gen_sk(300)?;
         key = pk;
     }
 
@@ -583,7 +583,7 @@ fn get_server_sk(key: &str) -> String {
         log::info!("Key: {}", key);
     }
 
-    key
+    Ok(key)
 }
 
 #[async_trait]
