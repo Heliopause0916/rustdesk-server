@@ -1,4 +1,4 @@
-FROM lejianwen/rustdesk-api:latest
+FROM lejianwen/rustdesk-api:v2.7
 
 ARG S6_OVERLAY_VERSION=3.2.0.0
 ARG S6_ARCH=x86_64
