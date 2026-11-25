@@ -423,7 +423,11 @@ async fn make_pair(
             }
             Ok(response)
         };
-        let ws_stream = timeout(30_000, tokio_tungstenite::accept_hdr_async(stream, callback)).await??;
+        let ws_stream = timeout(
+            30_000,
+            tokio_tungstenite::accept_hdr_async(stream, callback),
+        )
+        .await??;
         make_pair_(ws_stream, addr, key, limiter).await;
     } else {
         make_pair_(FramedStream::from(stream, addr), addr, key, limiter).await;
@@ -453,7 +457,8 @@ async fn make_pair_(stream: impl StreamTrait, addr: SocketAddr, key: &str, limit
                             stream.set_raw();
                             log::info!("Both are raw");
                         }
-                        if let Err(err) = relay(addr, &mut stream, &mut peer, limiter, id.clone()).await
+                        if let Err(err) =
+                            relay(addr, &mut stream, &mut peer, limiter, id.clone()).await
                         {
                             log::info!("Relay of {} closed: {}", addr, err);
                         } else {
@@ -476,7 +481,11 @@ async fn make_pair_(stream: impl StreamTrait, addr: SocketAddr, key: &str, limit
 
 /// Removes a waiting connection only if it still owns the requested pair ID.
 fn expire_waiter(peers: &mut HashMap<String, WaitingPeer>, id: &str, generation: &Arc<()>) {
-    if peers.get(id).map(|(current, _)| Arc::ptr_eq(current, generation)).unwrap_or(false) {
+    if peers
+        .get(id)
+        .map(|(current, _)| Arc::ptr_eq(current, generation))
+        .unwrap_or(false)
+    {
         peers.remove(id);
     }
 }
@@ -609,10 +618,16 @@ mod tests {
         }
         /// Simulates a relay write for the test stream.
         async fn send_raw(&mut self, _: Bytes) -> ResultType<()> {
-            if self.blocked { std::future::pending().await } else { Ok(()) }
+            if self.blocked {
+                std::future::pending().await
+            } else {
+                Ok(())
+            }
         }
         /// Uses non-WebSocket framing for the test stream.
-        fn is_ws(&self) -> bool { false }
+        fn is_ws(&self) -> bool {
+            false
+        }
         /// Leaves the test stream unchanged when raw mode is requested.
         fn set_raw(&mut self) {}
     }
@@ -620,19 +635,37 @@ mod tests {
     /// Checks that a blocked relay write ends with a timeout in the selected direction.
     async fn check_blocked_send(from_peer: bool) {
         let mut stream = TestStream {
-            data: if from_peer { None } else { Some(BytesMut::from(&b"x"[..])) },
+            data: if from_peer {
+                None
+            } else {
+                Some(BytesMut::from(&b"x"[..]))
+            },
             blocked: from_peer,
         };
         let mut peer: Box<dyn StreamTrait> = Box::new(TestStream {
-            data: if from_peer { Some(BytesMut::from(&b"x"[..])) } else { None },
+            data: if from_peer {
+                Some(BytesMut::from(&b"x"[..]))
+            } else {
+                None
+            },
             blocked: !from_peer,
         });
-        let result = timeout(35_000, relay(
-            "127.0.0.1:1".parse().unwrap(), &mut stream, &mut peer,
-            Limiter::new(1_000_000.), "blocked-send-test".to_owned(),
-        )).await.expect("a blocked relay write must finish within its deadline");
+        let result = timeout(
+            35_000,
+            relay(
+                "127.0.0.1:1".parse().unwrap(),
+                &mut stream,
+                &mut peer,
+                Limiter::new(1_000_000.),
+                "blocked-send-test".to_owned(),
+            ),
+        )
+        .await
+        .expect("a blocked relay write must finish within its deadline");
         let error = result.expect_err("the blocked write must fail");
-        assert!(error.downcast_ref::<tokio::time::error::Elapsed>().is_some());
+        assert!(error
+            .downcast_ref::<tokio::time::error::Elapsed>()
+            .is_some());
     }
 
     /// Checks that stalled writes time out in either relay direction.
@@ -794,11 +827,17 @@ mod waiter_tests {
     #[async_trait]
     impl StreamTrait for TestStream {
         /// Provides the test stream receive behavior.
-        async fn recv(&mut self) -> Option<Result<BytesMut, Error>> { None }
+        async fn recv(&mut self) -> Option<Result<BytesMut, Error>> {
+            None
+        }
         /// Simulates a relay write for the test stream.
-        async fn send_raw(&mut self, _: Bytes) -> ResultType<()> { Ok(()) }
+        async fn send_raw(&mut self, _: Bytes) -> ResultType<()> {
+            Ok(())
+        }
         /// Uses non-WebSocket framing for the test stream.
-        fn is_ws(&self) -> bool { false }
+        fn is_ws(&self) -> bool {
+            false
+        }
         /// Leaves the test stream unchanged when raw mode is requested.
         fn set_raw(&mut self) {}
     }
