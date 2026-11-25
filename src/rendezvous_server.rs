@@ -80,6 +80,14 @@ static API_ADDR: Lazy<String> = Lazy::new(|| {
         addr.to_owned()
     }
 });
+/// Shared HTTP client for all api server calls, with a hard timeout so a
+/// slow or unreachable api server cannot stall the rendezvous paths.
+static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .expect("Failed to build HTTP client for API calls")
+});
 const MAX_RELAY_UUID_LEN: usize = 128;
 
 // The peer sends this uuid to whatever relay_server names, so keep control bytes out of it.
@@ -805,8 +813,7 @@ impl RendezvousServer {
     #[inline]
     async fn test_user(api_url: &str, token: &str) -> bool {
         let url = format!("{}/api/user/info", api_url);
-        let client = reqwest::Client::new();
-        if let Ok(resp) = client.get(&url)
+        if let Ok(resp) = HTTP_CLIENT.get(&url)
             .header("Authorization", format!("Bearer {}", token))
             .header("Accept", "application/json")
             .send().await {
@@ -823,9 +830,9 @@ impl RendezvousServer {
             ConnType::FILE_TRANSFER => "file_transfer",
             _ => "default_conn",
         };
-        let url = format!("{}/api/query-share-peer?peer_id={}&conn_type={}", api_url, peer_id, conn_type_str);
-        let client = reqwest::Client::new();
-        if let Ok(resp) = client.get(&url)
+        let url = format!("{}/api/query-share-peer", api_url);
+        if let Ok(resp) = HTTP_CLIENT.get(&url)
+            .query(&[("peer_id", peer_id), ("conn_type", conn_type_str)])
             .header("Accept", "application/json")
             .send().await {
                 if let Ok(json) = resp.json::<serde_json::Value>().await {
