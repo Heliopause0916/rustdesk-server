@@ -578,10 +578,18 @@ impl RendezvousServer {
                     // without this, a client could skip PunchHoleRequest
                     // entirely and reach a peer via RequestRelay alone,
                     // bypassing the login requirement.
-                    if MUST_LOGIN.load(Ordering::SeqCst) {
+                    // 判断是否分享id
+                    let conn_type = rf.conn_type.enum_value_or(ConnType::DEFAULT_CONN);
+                    let is_shared =
+                        Self::query_share_peer(API_ADDR.as_str(), rf.id.as_str(), conn_type).await;
+                    // if secret is not empty check token by jwt
+                    if !is_shared && MUST_LOGIN.load(Ordering::SeqCst) {
                         let mut authed = !rf.token.is_empty();
                         if authed && !jwt::SECRET.is_empty() {
                             authed = jwt::verify_token(rf.token.as_str()).is_ok();
+                        }
+                        if authed {
+                            authed = Self::test_user(API_ADDR.as_str(), rf.token.as_str()).await;
                         }
                         if !authed {
                             log::warn!(
