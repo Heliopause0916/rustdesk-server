@@ -62,6 +62,24 @@ type RelayServers = Vec<String>;
 const CHECK_RELAY_TIMEOUT: u64 = 3_000;
 static ALWAYS_USE_RELAY: AtomicBool = AtomicBool::new(false);
 static MUST_LOGIN: AtomicBool = AtomicBool::new(false);
+/// Default address of the api server running next to hbbs/hbbr.
+const DEFAULT_API_ADDR: &str = "http://127.0.0.1:21114";
+/// Address of the api server used for shared-id queries and user checks.
+/// Comes from `-a/--api-addr`, or the `API_ADDR` env variable (docker),
+/// and falls back to `DEFAULT_API_ADDR` when not set.
+static API_ADDR: Lazy<String> = Lazy::new(|| {
+    let mut addr = get_arg("api-addr");
+    if addr.is_empty() {
+        // plain env variable, used by docker-compose
+        addr = std::env::var("API_ADDR").unwrap_or_default();
+    }
+    let addr = addr.trim().trim_end_matches('/');
+    if addr.is_empty() {
+        DEFAULT_API_ADDR.to_owned()
+    } else {
+        addr.to_owned()
+    }
+});
 const MAX_RELAY_UUID_LEN: usize = 128;
 
 // The peer sends this uuid to whatever relay_server names, so keep control bytes out of it.
@@ -230,6 +248,7 @@ impl RendezvousServer {
                 "N"
             }
         );
+        log::info!("API_ADDR={}", API_ADDR.as_str());
         if test_addr.to_lowercase() != "no" {
             let test_addr = if test_addr.is_empty() {
                 listener.local_addr()?
@@ -829,7 +848,7 @@ impl RendezvousServer {
         // 判断是否分享id
         let id = ph.id;
         let conn_type = ph.conn_type.enum_value_or(ConnType::DEFAULT_CONN);
-        let is_shared = Self::query_share_peer("http://127.0.0.1:21114", id.as_str(), conn_type).await;
+        let is_shared = Self::query_share_peer(API_ADDR.as_str(), id.as_str(), conn_type).await;
         // if secret is not empty check token by jwt
         if !is_shared && MUST_LOGIN.load(Ordering::SeqCst) {
             if ph.token.is_empty() {
@@ -853,7 +872,7 @@ impl RendezvousServer {
                 }
             }
             let token = ph.token;
-            if !Self::test_user("http://127.0.0.1:21114", token.as_str()).await {
+            if !Self::test_user(API_ADDR.as_str(), token.as_str()).await {
                 let mut msg_out = RendezvousMessage::new();
                 msg_out.set_punch_hole_response(PunchHoleResponse {
                     other_failure: String::from("Token error, please log in!"),
