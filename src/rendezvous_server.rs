@@ -1,4 +1,5 @@
 use crate::common::*;
+use crate::jwt;
 use crate::peer::*;
 use hbb_common::{
     allow_err, bail,
@@ -47,7 +48,7 @@ enum Data {
     RelayServers(RelayServers),
 }
 
-const REG_TIMEOUT: i64 = 30_000;
+const REG_TIMEOUT: i64 = 100_000; //当使用websocket时，注册间隔时间会很长，改为100
 type TcpStreamSink = SplitSink<Framed<TcpStream, BytesCodec>, Bytes>;
 type WsSink = SplitSink<tokio_tungstenite::WebSocketStream<TcpStream>, tungstenite::Message>;
 enum Sink {
@@ -60,6 +61,7 @@ static ROTATION_RELAY_SERVER: AtomicUsize = AtomicUsize::new(0);
 type RelayServers = Vec<String>;
 const CHECK_RELAY_TIMEOUT: u64 = 3_000;
 static ALWAYS_USE_RELAY: AtomicBool = AtomicBool::new(false);
+static MUST_LOGIN: AtomicBool = AtomicBool::new(false);
 
 // Store punch hole requests
 use once_cell::sync::Lazy;
@@ -161,6 +163,27 @@ impl RendezvousServer {
         log::info!(
             "ALWAYS_USE_RELAY={}",
             if ALWAYS_USE_RELAY.load(Ordering::SeqCst) {
+                "Y"
+            } else {
+                "N"
+            }
+        );
+
+        let must_login = get_arg("must-login");
+        log::debug!("must_login={}", must_login);
+        if must_login.to_uppercase() == "Y"
+            || (must_login == ""
+                && std::env::var("MUST_LOGIN")
+                    .unwrap_or_default()
+                    .to_uppercase()
+                    == "Y")
+        {
+            MUST_LOGIN.store(true, Ordering::SeqCst);
+        }
+
+        log::info!(
+            "MUST_LOGIN={}",
+            if MUST_LOGIN.load(Ordering::SeqCst) {
                 "Y"
             } else {
                 "N"
@@ -554,6 +577,15 @@ impl RendezvousServer {
                     });
                     Self::send_to_sink(sink, msg_out).await;
                 }
+                Some(rendezvous_message::Union::OnlineRequest(or)) => {
+                    let mut states = self.peers_online_state(or.peers).await;
+                    let mut msg_out = RendezvousMessage::new();
+                    msg_out.set_online_response(OnlineResponse {
+                        states: states.into(),
+                        ..Default::default()
+                    });
+                    Self::send_to_sink(sink, msg_out).await;
+                }
                 _ => {}
             }
         }
@@ -707,7 +739,31 @@ impl RendezvousServer {
                 });
                 return Ok((msg_out, None));
             }
-            
+
+            // if secret is not empty check token by jwt
+            if MUST_LOGIN.load(Ordering::SeqCst) {
+                if ph.token.is_empty() {
+                    let mut msg_out = RendezvousMessage::new();
+                    msg_out.set_punch_hole_response(PunchHoleResponse {
+                        other_failure: String::from("Connection failed, please login!"),
+                        ..Default::default()
+                    });
+                    return Ok((msg_out, None));
+                } else if !jwt::SECRET.is_empty() {
+                    let token = ph.token;
+                    let token = jwt::verify_token(token.as_str());
+                    if token.is_err() {
+                        let mut msg_out = RendezvousMessage::new();
+                        msg_out.set_punch_hole_response(PunchHoleResponse {
+                            //提示重新登录
+                            other_failure: String::from("Token error, please log out and log back in!"),
+                            ..Default::default()
+                        });
+                        return Ok((msg_out, None));
+                    }
+                }
+            }
+
             // record punch hole request (from addr -> peer id/peer_addr)
             {
                 let from_ip = try_into_v4(addr).ip().to_string();
@@ -781,12 +837,7 @@ impl RendezvousServer {
         }
     }
 
-    #[inline]
-    async fn handle_online_request(
-        &mut self,
-        stream: &mut FramedStream,
-        peers: Vec<String>,
-    ) -> ResultType<()> {
+    async fn peers_online_state(&mut self, peers: Vec<String>) -> BytesMut {
         let mut states = BytesMut::zeroed((peers.len() + 7) / 8);
         for (i, peer_id) in peers.iter().enumerate() {
             if let Some(peer) = self.pm.get_in_memory(peer_id).await {
@@ -799,6 +850,16 @@ impl RendezvousServer {
                 }
             }
         }
+        states
+    }
+
+    #[inline]
+    async fn handle_online_request(
+        &mut self,
+        stream: &mut FramedStream,
+        peers: Vec<String>,
+    ) -> ResultType<()> {
+        let mut states = self.peers_online_state(peers).await;
 
         let mut msg_out = RendezvousMessage::new();
         msg_out.set_online_response(OnlineResponse {
@@ -934,14 +995,15 @@ impl RendezvousServer {
         match fds.next() {
             Some("h") => {
                 res = format!(
-                    "{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
+                    "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n",
                     "relay-servers(rs) <separated by ,>",
                     "reload-geo(rg)",
                     "ip-blocker(ib) [<ip>|<number>] [-]",
                     "ip-changes(ic) [<id>|<number>] [-]",
                     "punch-requests(pr) [<number>] [-]",
                     "always-use-relay(aur)",
-                    "test-geo(tg) <ip1> <ip2>"
+                    "test-geo(tg) <ip1> <ip2>",
+                    "must-login(ml) [Y|N]"
                 )
             }
             Some("relay-servers" | "rs") => {
@@ -1084,6 +1146,17 @@ impl RendezvousServer {
                             res = format!("{:?}", self.get_relay_server(a, a));
                         }
                     }
+                }
+            }
+            Some("must-login" | "ml") => {
+                if let Some(rs) = fds.next() {
+                    if rs.to_uppercase() == "Y" {
+                        MUST_LOGIN.store(true, Ordering::SeqCst);
+                    } else {
+                        MUST_LOGIN.store(false, Ordering::SeqCst);
+                    }
+                } else {
+                    let _ = writeln!(res, "MUST_LOGIN: {:?}", MUST_LOGIN.load(Ordering::SeqCst));
                 }
             }
             _ => {}
