@@ -555,6 +555,24 @@ impl RendezvousServer {
                     return true;
                 }
                 Some(rendezvous_message::Union::RequestRelay(mut rf)) => {
+                    // Same MUST_LOGIN enforcement as handle_tcp_punch_hole_request -
+                    // without this, a client could skip PunchHoleRequest
+                    // entirely and reach a peer via RequestRelay alone,
+                    // bypassing the login requirement.
+                    if MUST_LOGIN.load(Ordering::SeqCst) {
+                        let mut authed = !rf.token.is_empty();
+                        if authed && !jwt::SECRET.is_empty() {
+                            authed = jwt::verify_token(rf.token.as_str()).is_ok();
+                        }
+                        if !authed {
+                            log::warn!(
+                                "RequestRelay from {} for peer {} rejected - MUST_LOGIN is set and no valid token was provided",
+                                addr,
+                                rf.id
+                            );
+                            return true;
+                        }
+                    }
                     if let Err(err) = validate_relay_uuid(&rf.uuid) {
                         log::warn!(
                             "Drop RequestRelay from {addr}: {err} (length {})",
