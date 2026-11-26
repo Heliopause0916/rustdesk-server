@@ -1,4 +1,5 @@
-FROM lejianwen/rustdesk-api:v2.7
+ARG BASE_IMAGE=lejianwen/rustdesk-api:v2.7
+FROM ${BASE_IMAGE}
 
 ARG S6_OVERLAY_VERSION=3.2.0.0
 ARG S6_ARCH=x86_64
@@ -8,7 +9,7 @@ RUN \
   tar -C / -Jxpf /tmp/s6-overlay-noarch.tar.xz && \
   tar -C / -Jxpf /tmp/s6-overlay-${S6_ARCH}.tar.xz && \
   rm /tmp/s6-overlay*.tar.xz && \
-  ln -s /run /var/run
+  ln -sfn /run /var/run
 
 COPY rootfs /
 
